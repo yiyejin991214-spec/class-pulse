@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>교실 신호등 · 선생님</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+<script src="config.js"></script>
+<script src="common.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- 방 만들기 -->
+  <section id="vCreate" class="glass" hidden style="max-width:460px;margin:40px auto">
+    <div class="center"><div style="font-size:44px">🚦</div><h1 style="font-size:26px">새 수업 방 만들기</h1></div>
+    <label for="cTitle">수업 이름 (30자 이내)</label>
+    <input id="cTitle" maxlength="30" placeholder="예: 6학년 2반 분수의 나눗셈">
+    <label for="cMin">수업 시간</label>
+    <select id="cMin">
+      <option value="10">10분 (짧은 활동)</option><option value="20">20분</option>
+      <option value="40" selected>40분 (초등 1차시)</option><option value="45">45분</option>
+      <option value="50">50분</option><option value="80">80분 (블록 수업)</option>
+    </select>
+    <button id="btnCreate" class="jelly btn-violet" style="width:100%;margin-top:16px">방 만들기</button>
+    <div id="cErr" class="error"></div>
+    <p class="small center"><a href="index.html">← 처음으로</a></p>
+  </section>
+
+  <!-- 방 화면 -->
+  <section id="vMain" hidden>
+    <header class="glass topbar">
+      <div class="logo">🚦</div>
+      <div class="grow"><b id="tTitle"></b><div class="small" id="tInfo"></div></div>
+      <span id="tTimer" class="pill timer">--:--</span>
+      <button id="btnStart" class="jelly btn-violet" hidden>▶ 수업 시작</button>
+      <button id="btnEnd" class="jelly btn-pink" hidden>수업 종료</button>
+    </header>
+
+    <!-- 대기 -->
+    <main id="vWait" class="grid2" hidden>
+      <div class="glass">
+        <h3 class="center">휴대폰 카메라로 찍고 들어오세요</h3>
+        <div id="qr" class="qr" style="margin-top:10px"></div>
+        <div class="small center" style="margin-top:10px">방 번호</div>
+        <div id="bigCode" class="big-code"></div>
+        <div id="qrUrl" class="url"></div>
+      </div>
+      <div class="glass">
+        <div class="row" style="justify-content:space-between"><h3>들어온 친구들</h3><b id="wCount"></b></div>
+        <div id="wChips" class="chips" style="margin-top:12px"></div>
+        <p class="small" id="wEmpty">아직 아무도 없어요. QR을 보여 주세요.</p>
+        <div class="row" style="margin-top:20px"><button id="btnDelWait" class="jelly btn-white">방 지우기</button></div>
+      </div>
+    </main>
+
+    <!-- 수업 중 -->
+    <main id="vPlay" class="grid2b" hidden>
+      <div class="stack">
+        <div class="glass">
+          <div class="row" style="justify-content:space-between"><h3>실시간 신호등</h3><span class="small" id="pTotal"></span></div>
+          <div id="meters"></div>
+          <div id="nudge"></div>
+        </div>
+        <div class="glass">
+          <h3 style="margin-bottom:10px">친구들</h3>
+          <div id="pChips" class="chips"></div>
+        </div>
+      </div>
+      <div class="glass">
+        <div class="row" style="justify-content:space-between">
+          <h3>❓ 질문 (나도 궁금 순)</h3>
+          <button id="btnAI" class="btn-mini">✨ AI로 질문 묶어 보기</button>
+        </div>
+        <div id="aiBox" class="ai-box" hidden></div>
+        <div id="qPlay" style="margin-top:10px"></div>
+      </div>
+    </main>
+
+    <!-- 종료 -->
+    <main id="vEnd" class="stack" hidden>
+      <div class="glass">
+        <h3 style="margin-bottom:10px">오늘 수업 요약</h3>
+        <div id="eStat" class="stat"></div>
+      </div>
+      <div class="glass">
+        <h3 style="margin-bottom:4px">시간 흐름: 언제 헷갈렸을까?</h3>
+        <p class="small" style="margin:0 0 10px">가로: 수업 n분째 · 세로: 그 분에 신호등을 누른 횟수</p>
+        <div id="eChart"></div>
+        <div id="eInsight" style="margin-top:10px;font-weight:800"></div>
+      </div>
+      <div class="glass">
+        <h3 style="margin-bottom:10px">질문 모음</h3>
+        <div id="qEnd"></div>
+      </div>
+      <div class="glass row">
+        <button id="btnDelEnd" class="jelly btn-pink">🗑 기록 지우기 (별명·질문 삭제)</button>
+        <button id="btnNew" class="jelly btn-white">새 수업 만들기</button>
+        <span class="small">기록은 하루가 지나면 자동으로도 지워져요.</span>
+      </div>
+    </main>
+</section>
+</div>
+
+<script>
+const KEY = 'pulse-teacher';                       // 선생님 브라우저에는 방 번호 + 비밀 코드를 남겨요
+const $ = id => document.getElementById(id);
+let S = { room: null, code: null, st: null, players: [], questions: [], timeline: null, qrDone: false };
+let lastEndCheck = 0, sync = null;
+
+/* ---------- 시작 ---------- */
+(async function boot() {
+  const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
+  if (saved) {
+    try {
+      const ok = await rpc('verify_teacher', { p_room: saved.room, p_teacher_code: saved.code });
+      if (ok) { enter(saved.room, saved.code); return; }
+    } catch (e) { console.warn(e); }
+    localStorage.removeItem(KEY);
+  }
+  $('vCreate').hidden = false;
+})();
+
+$('btnCreate').onclick = async () => {
+  $('cErr').textContent = '';
+  $('btnCreate').disabled = true;
+  try {
+    const r = await rpc('create_room', { p_title: $('cTitle').value, p_duration_min: Number($('cMin').value) });
+    if (!r.ok) { $('cErr').textContent = errText(r.error); return; }
+    localStorage.setItem(KEY, JSON.stringify({ room: r.room_id, code: r.teacher_code }));
+    $('vCreate').hidden = true;
+    enter(r.room_id, r.teacher_code);
+  } catch (e) {
+    $('cErr').textContent = '연결에 문제가 있어요. config.js의 주소와 키를 확인해 주세요.';
+    console.error(e);
+  } finally { $('btnCreate').disabled = false; }
+};
+
+function enter(room, code) {
+  S.room = room; S.code = code;
+  $('vCreate').hidden = true; $('vMain').hidden = false;
+  syncClock().catch(console.warn);
+  setInterval(() => syncClock(1).catch(() => {}), 60000);
+  // 선생님 화면: 방 상태 + 학생 목록(입장 · 신호등 변화)을 구독
+  sync = liveSync({
+    tables: [{ table: 'rooms', filter: 'id=eq.' + room }, { table: 'players', filter: 'room_id=eq.' + room }],
+    refresh
+  });
+  setInterval(tick, 250);
+  setInterval(() => { if (S.st && S.st.status === 'playing') refreshQuestions(); }, 3000);
+}
+
+/* ---------- 데이터 가져오기 ---------- */
+async function refresh() {
+  if (!S.room) return;
+  const st = await rpc('get_room_state', { p_room: S.room });
+  if (!st.ok) { localStorage.removeItem(KEY); location.reload(); return; }
+  S.st = st;
+  const { data, error } = await db.from('players')
+    .select('id,nickname,animal,last_signal,joined_at').eq('room_id', S.room).order('joined_at');
+  if (error) throw error;
+  S.players = data || [];
+  if (st.status !== 'waiting') await refreshQuestions(true);
+  if (st.status === 'ended' && !S.timeline) {
+    const t = await rpc('get_timeline', { p_room: S.room, p_teacher_code: S.code });
+    S.timeline = t.ok ? t.rows : [];
+  }
+  render();
+}
+async function refreshQuestions(skipRender) {
+  S.questions = await rpc('list_questions', { p_room: S.room, p_teacher_code: S.code });
+  if (!skipRender) render();
+}
+
+/* ---------- 타이머 (서버 시계 기준) ---------- */
+function tick() {
+  if (!S.st) return;
+  if (S.st.status === 'playing') {
+    const left = S.st.ends_at_ms - serverNow();
+    $('tTimer').textContent = '⏱ ' + fmtTime(left);
+    if (left <= 0 && Date.now() - lastEndCheck > 1500) { lastEndCheck = Date.now(); sync.refreshNow(); }
+  }
+}
+
+/* ---------- 그리기 ---------- */
+function chip(p, withSignal) {
+  return `<span class="chip ${withSignal && p.last_signal ? 'sig-' + p.last_signal : ''}"><span class="av">${animalEmoji(p.animal)}</span>${esc(p.nickname)}</span>`;
+}
+function qItem(q, canAct) {
+  const who = q.nickname ? `${animalEmoji(q.animal)} ${esc(q.nickname)} · ` : '';
+  const btns = canAct ? `
+    <div class="row" style="gap:6px;margin-top:6px">
+      <button class="btn-mini" data-act="${q.status === 'answered' ? 'open' : 'answered'}" data-q="${q.id}">${q.status === 'answered' ? '다시 열기' : '✅ 답변 완료'}</button>
+      <button class="btn-mini" data-act="hidden" data-q="${q.id}">🙈 숨기기</button>
+    </div>` : '';
+  return `<div class="q ${q.status === 'answered' ? 'answered' : ''}">
+    <div class="body">${esc(q.body)}<div class="meta">${who}${q.status === 'answered' ? '✅ 답변 완료' : ''}</div>${btns}</div>
+    <div class="like" style="text-align:center">👍<br>${q.likes}</div></div>`;
+}
+function drawQr() {
+  if (S.qrDone) return;
+  S.qrDone = true;
+  const url = location.origin + location.pathname.replace(/teacher\.html$/, '') + 'student.html?code=' + S.room;
+  const qr = qrcode(0, 'M');                       // 오류 정정 등급 M (약 15% 복구)
+  qr.addData(url); qr.make();
+  $('qr').innerHTML = qr.createSvgTag(4, 0);
+  $('qrUrl').textContent = url;
+}
+function counts() {
+  const c = { green: 0, yellow: 0, red: 0, none: 0 };
+  S.players.forEach(p => { if (p.last_signal) c[p.last_signal]++; else c.none++; });
+  return c;
+}
+function render() {
+  const st = S.st; if (!st) return;
+  const n = S.players.length;
+  $('tTitle').textContent = st.title;
+  $('tInfo').textContent = `방 번호 ${S.room} · ${n}명 참여`;
+  $('vWait').hidden = st.status !== 'waiting';
+  $('vPlay').hidden = st.status !== 'playing';
+  $('vEnd').hidden  = st.status !== 'ended';
+  $('btnStart').hidden = st.status !== 'waiting';
+  $('btnEnd').hidden = st.status !== 'playing';
+  if (st.status === 'waiting') $('tTimer').textContent = st.duration_min + '분';
+  if (st.status === 'ended') $('tTimer').textContent = '종료';
+
+  if (st.status === 'waiting') {
+    drawQr();
+    $('bigCode').textContent = S.room;
+    $('wCount').textContent = n + '명';
+    $('wEmpty').hidden = n > 0;
+    $('wChips').innerHTML = S.players.map(p => chip(p, false)).join('');
+  }
+  if (st.status === 'playing') {
+    const c = counts();
+    $('pTotal').textContent = `전체 ${n}명 · 아직 안 누름 ${c.none}명`;
+    $('meters').innerHTML = ['green', 'yellow', 'red'].map(k => {
+      const pct = n ? Math.round(c[k] / n * 100) : 0;
+      return `<div class="meter"><span class="pill">${SIGNALS[k].emoji} ${SIGNALS[k].label}</span>
+        <div class="bar"><i class="i-${k}" style="width:${pct}%"></i></div><b>${c[k]}</b></div>`;
+    }).join('');
+    const pressed = c.green + c.yellow + c.red;
+    const hard = c.yellow + c.red;
+    $('nudge').innerHTML =
+      (pressed >= 3 && hard / pressed >= 0.3) ? `<div class="nudge">🔔 신호를 누른 학생의 ${Math.round(hard / pressed * 100)}%가 헷갈려해요. 한 번 더 설명해 볼까요?</div>` :
+      (pressed >= 3 && c.green / pressed >= 0.8) ? `<div class="nudge" style="background:#dff6e9">👍 대부분 잘 이해하고 있어요. 다음으로 넘어가도 좋아요!</div>` : '';
+    $('pChips').innerHTML = n ? S.players.map(p => chip(p, true)).join('') : '<span class="small">아직 아무도 없어요</span>';
+    $('qPlay').innerHTML = S.questions.length ? S.questions.map(q => qItem(q, true)).join('') : '<p class="small">아직 질문이 없어요.</p>';
+  }
+  if (st.status === 'ended') renderEnd();
+}
+function renderEnd() {
+  const c = counts();
+  const totalPress = (S.timeline || []).reduce((a, r) => a + r.green + r.yellow + r.red, 0);
+  $('eStat').innerHTML = [
+    ['참여', n_(S.players.length) + '명'], ['마지막 신호 🟢', c.green], ['🟡', c.yellow], ['🔴', c.red],
+    ['신호 누른 횟수', totalPress], ['질문', S.questions.length + '개']
+  ].map(([k, v]) => `<div class="box"><b>${v}</b><span class="small">${k}</span></div>`).join('');
+  $('eChart').innerHTML = timelineSvg(S.timeline || []);
+  const rows = S.timeline || [];
+  if (rows.length) {
+    const worst = rows.reduce((a, r) => (r.yellow + r.red > a.yellow + a.red ? r : a), rows[0]);
+    $('eInsight').textContent = (worst.yellow + worst.red > 0)
+      ? `🔎 가장 많이 헷갈려한 때는 수업 ${worst.minute + 1}분째 (🟡 ${worst.yellow} + 🔴 ${worst.red}회)`
+      : '🎉 헷갈린다는 신호가 거의 없었어요!';
+  } else $('eInsight').textContent = '';
+  $('qEnd').innerHTML = S.questions.length ? S.questions.map(q => qItem(q, false)).join('') : '<p class="small">질문이 없었어요.</p>';
+}
+const n_ = x => x;
+
+function timelineSvg(rows) {
+  if (!rows.length) return '<p class="small">신호 기록이 없어요.</p>';
+  const n = Math.max(...rows.map(r => r.minute)) + 1;
+  const map = {}; rows.forEach(r => map[r.minute] = r);
+  const maxT = Math.max(1, ...rows.map(r => r.green + r.yellow + r.red));
+  const W = 640, H = 200, L = 30, B = 26, T = 12;
+  const bw = (W - L - 10) / n;
+  let g = `<line x1="${L}" y1="${H - B}" x2="${W - 6}" y2="${H - B}" stroke="#cfc8e6"/>
+    <text x="${L - 6}" y="${T + 4}" font-size="10" text-anchor="end" fill="#6d6590">${maxT}</text>
+    <text x="${L - 6}" y="${H - B}" font-size="10" text-anchor="end" fill="#6d6590">0</text>`;
+  for (let m = 0; m < n; m++) {
+    const r = map[m] || { green: 0, yellow: 0, red: 0 };
+    let y = H - B;
+    [['green', '#3fba7c'], ['yellow', '#f5b83d'], ['red', '#ee5a6f']].forEach(([k, col]) => {
+      const h = (r[k] / maxT) * (H - B - T);
+      y -= h;
+      if (h > 0) g += `<rect x="${(L + m * bw + bw * 0.12).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw * 0.76).toFixed(1)}" height="${h.toFixed(1)}" fill="${col}" rx="3"/>`;
+    });
+    if (n <= 30 || m % 5 === 0)
+      g += `<text x="${(L + m * bw + bw / 2).toFixed(1)}" y="${H - 8}" font-size="10" text-anchor="middle" fill="#6d6590">${m + 1}</text>`;
+  }
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="분 단위 신호등 누른 횟수">${g}</svg>`;
+}
+
+/* ---------- 버튼 ---------- */
+$('btnStart').onclick = async () => {
+  const r = await rpc('start_class', { p_room: S.room, p_teacher_code: S.code });
+  if (!r.ok) toast(errText(r.error));
+  sync.refreshNow();
+};
+$('btnEnd').onclick = async () => {
+  if (!confirm('수업을 끝낼까요? 끝나면 학생들은 더 이상 신호를 보낼 수 없어요.')) return;
+  const r = await rpc('end_class', { p_room: S.room, p_teacher_code: S.code });
+  if (!r.ok) toast(errText(r.error));
+  sync.refreshNow();
+};
+async function deleteRoom() {
+  if (!confirm('이 방의 별명 · 질문 · 신호 기록이 모두 지워져요. 지울까요?')) return false;
+  const r = await rpc('delete_room', { p_room: S.room, p_teacher_code: S.code });
+  if (!r.ok) { toast(errText(r.error)); return false; }
+  localStorage.removeItem(KEY);
+  return true;
+}
+$('btnDelWait').onclick = async () => { if (await deleteRoom()) location.reload(); };
+$('btnDelEnd').onclick  = async () => { if (await deleteRoom()) location.reload(); };
+$('btnNew').onclick = () => { localStorage.removeItem(KEY); location.reload(); };
+
+document.addEventListener('click', async e => {
+  const b = e.target.closest('button[data-act]'); if (!b) return;
+  const r = await rpc('mark_question', { p_room: S.room, p_teacher_code: S.code, p_question: Number(b.dataset.q), p_status: b.dataset.act });
+  if (!r.ok) toast(errText(r.error));
+  refreshQuestions();
+});
+
+/* ---------- (선택) AI로 질문 묶기: Vercel 서버 함수 /api/summarize ---------- */
+$('btnAI').onclick = async () => {
+  const box = $('aiBox');
+  box.hidden = false; box.textContent = '질문을 읽고 묶는 중이에요… (10~20초)';
+  $('btnAI').disabled = true;
+  try {
+    const res = await fetch('/api/summarize', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ room: S.room, teacher_code: S.code })
+    });
+    const j = await res.json();
+    if (!res.ok || !j.ok) { box.textContent = 'AI 요약을 못 했어요: ' + (j.error || res.status); return; }
+    box.innerHTML = (j.themes || []).map(t =>
+      `<h3>📌 ${esc(t.title)} <span class="small">(${esc(t.count)}개)</span></h3>
+       <div class="small">${(t.questions || []).map(esc).join('<br>')}</div>`).join('') +
+      (j.tip ? `<h3>💡 수업 팁</h3><div>${esc(j.tip)}</div>` : '');
+  } catch (e) {
+    box.textContent = 'AI 요약 기능이 아직 설정되지 않았어요. (선택 기능)';
+  } finally { $('btnAI').disabled = false; }
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>교실 신호등 · 학생</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="common.js"></script>
+</head>
+<body>
+<div class="wrap phone">
+
+  <!-- 1) 입장 -->
+  <section id="vJoin" class="glass" hidden>
+    <div class="center"><div style="font-size:40px">🚦</div><h1 style="font-size:26px">교실 신호등</h1>
+      <p class="small">이름 대신 별명을 써요</p></div>
+    <label for="jCode">방 번호</label>
+    <input id="jCode" inputmode="numeric" maxlength="4" placeholder="4자리 숫자">
+    <label for="jName">내 별명 (1~10자, 실명은 쓰지 마세요)</label>
+    <input id="jName" maxlength="10" placeholder="예: 하늘" autocomplete="off">
+    <label>동물 친구</label>
+    <div id="animals" class="animals"></div>
+    <button id="btnJoin" class="jelly btn-violet" style="width:100%;margin-top:16px">들어가기</button>
+    <div id="jErr" class="error"></div>
+  </section>
+
+  <!-- 2) 대기 -->
+  <section id="vWait" class="glass center" hidden style="margin-top:40px">
+    <div id="wAv" class="avatar-big"></div>
+    <h2 id="wName"></h2>
+    <p style="font-weight:800">선생님이 시작하면<br>신호등이 나와요!</p>
+    <p class="small" id="wTitle"></p>
+    <button id="btnRejoin" class="btn-mini">다른 이름으로 다시 들어가기</button>
+  </section>
+
+  <!-- 3) 수업 중 -->
+  <section id="vPlay" hidden>
+    <div class="glass topbar" style="padding:10px 14px">
+      <span id="pAv" style="font-size:26px"></span>
+      <b id="pName" class="grow"></b>
+      <span id="pTimer" class="pill">--:--</span>
+    </div>
+
+    <div class="glass" style="margin-bottom:14px">
+      <h2 style="font-size:17px;margin-bottom:10px">지금 내 마음은?</h2>
+      <div class="sig-btns" id="sigBtns"></div>
+    </div>
+
+    <div class="glass">
+      <h2 style="font-size:17px;margin-bottom:8px">❓ 궁금한 점 <span class="small">(친구들에게는 익명이에요)</span></h2>
+      <textarea id="qBody" rows="2" maxlength="100" placeholder="궁금한 걸 짧게 써 보세요"></textarea>
+      <div class="row" style="justify-content:space-between;margin-top:8px">
+        <span class="small" id="qCount">0 / 100</span>
+        <button id="btnAsk" class="jelly btn-violet" style="padding:8px 16px">질문 보내기</button>
+      </div>
+      <h3 style="font-size:14px;margin:16px 0 8px">친구들의 질문 · 나도 궁금하면 눌러요</h3>
+      <div id="qList"></div>
+    </div>
+  </section>
+
+  <!-- 4) 종료 -->
+  <section id="vEnd" class="glass center" hidden style="margin-top:40px">
+    <div style="font-size:48px">🎉</div>
+    <h2>수업 끝! 수고했어요</h2>
+    <p id="eInfo" style="font-weight:800"></p>
+    <p class="small">선생님이 수업 기록을 지우면 내 별명도 함께 사라져요.</p>
+    <a href="index.html"><button class="btn-mini">처음으로</button></a>
+  </section>
+</div>
+
+<script>
+const KEY = 'pulse-player';                       // 학생 번호·토큰·별명 (탭마다 따로, 새로고침은 유지)
+let ME = JSON.parse(sessionStorage.getItem(KEY) || 'null');
+let ST = null;                                    // 방 상태
+let pick = ANIMALS[0].key;
+let qTimer = null, tickTimer = null, lastEndCheck = 0;
+
+const $ = id => document.getElementById(id);
+const show = name => ['vJoin','vWait','vPlay','vEnd'].forEach(v => $(v).hidden = (v !== name));
+const saveMe = () => sessionStorage.setItem(KEY, JSON.stringify(ME));
+
+/* ---------- 입장 ---------- */
+function buildAnimals() {
+  $('animals').innerHTML = ANIMALS.map(a =>
+    `<button type="button" data-k="${a.key}" class="${a.key === pick ? 'on' : ''}">${a.emoji}</button>`).join('');
+}
+$('animals').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  pick = b.dataset.k; buildAnimals();
+});
+$('btnJoin').onclick = async () => {
+  $('jErr').textContent = '';
+  const room = $('jCode').value.trim(), name = $('jName').value.trim();
+  if (!/^[0-9]{4}$/.test(room)) { $('jErr').textContent = '방 번호는 숫자 4자리예요.'; return; }
+  if (!name) { $('jErr').textContent = '별명을 써 주세요.'; return; }
+  $('btnJoin').disabled = true;
+  try {
+    const r = await rpc('join_room', { p_room: room, p_nickname: name, p_animal: pick });
+    if (!r.ok) { $('jErr').textContent = errText(r.error); return; }
+    ME = { room, player_id: r.player_id, token: r.token, nickname: r.nickname, animal: r.animal, signal: null };
+    saveMe();
+    start();
+  } catch (e) {
+    $('jErr').textContent = '연결에 문제가 있어요. 잠시 뒤에 다시 해 주세요.';
+    console.error(e);
+  } finally { $('btnJoin').disabled = false; }
+};
+$('btnRejoin').onclick = () => { sessionStorage.removeItem(KEY); location.href = 'student.html?code=' + ME.room; };
+
+/* ---------- 방 상태에 따라 화면 바꾸기 ---------- */
+async function refreshState() {
+  if (!ME) return;
+  const st = await rpc('get_room_state', { p_room: ME.room });
+  if (!st.ok) {                                    // 방이 지워졌어요 -> 입장 화면으로
+    const old = ME.room;
+    sessionStorage.removeItem(KEY);
+    location.href = 'student.html?gone=1&code=' + old;
+    return;
+  }
+  ST = st;
+  $('wTitle').textContent = '수업: ' + st.title;
+  if (st.status === 'waiting') show('vWait');
+  else if (st.status === 'playing') { show('vPlay'); loadQuestions(); }
+  else { show('vEnd'); loadQuestions(true); }
+}
+
+/* ---------- 타이머(서버 시계 기준) ---------- */
+function tick() {
+  if (!ST || ST.status !== 'playing') return;
+  const left = ST.ends_at_ms - serverNow();
+  $('pTimer').textContent = '⏱ ' + fmtTime(left);
+  if (left <= 0 && Date.now() - lastEndCheck > 1500) { lastEndCheck = Date.now(); refreshState(); }
+}
+
+/* ---------- 신호등 ---------- */
+function buildSignals() {
+  $('sigBtns').innerHTML = Object.keys(SIGNALS).map(k => {
+    const s = SIGNALS[k];
+    const cls = 'sig ' + k + (ME.signal === k ? ' on' : (ME.signal ? ' dim' : ''));
+    return `<button class="${cls}" data-s="${k}"><span style="font-size:30px">${s.emoji}</span><span>${s.label}<small>${s.sub}</small></span></button>`;
+  }).join('');
+}
+$('sigBtns').addEventListener('click', async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  try {
+    const r = await rpc('set_signal', { p_player: ME.player_id, p_token: ME.token, p_signal: b.dataset.s });
+    if (!r.ok) { toast(errText(r.error)); return; }
+    ME.signal = b.dataset.s; saveMe(); buildSignals();
+  } catch (err) { toast('연결에 문제가 있어요'); console.error(err); }
+});
+
+/* ---------- 질문 ---------- */
+$('qBody').addEventListener('input', () => $('qCount').textContent = $('qBody').value.length + ' / 100');
+$('btnAsk').onclick = async () => {
+  const body = $('qBody').value.trim();
+  if (!body) { toast('질문을 써 주세요'); return; }
+  try {
+    const r = await rpc('ask_question', { p_player: ME.player_id, p_token: ME.token, p_body: body });
+    if (!r.ok) { toast(errText(r.error)); return; }
+    $('qBody').value = ''; $('qCount').textContent = '0 / 100';
+    toast('질문을 보냈어요!'); loadQuestions();
+  } catch (err) { toast('연결에 문제가 있어요'); console.error(err); }
+};
+async function loadQuestions(forEnd) {
+  try {
+    const list = await rpc('list_questions', { p_room: ME.room, p_player: ME.player_id, p_token: ME.token });
+    if (forEnd) {
+      const mine = list.filter(q => q.mine);
+      const likes = mine.reduce((a, q) => a + q.likes, 0);
+      $('eInfo').textContent = mine.length ? `내가 올린 질문 ${mine.length}개 · 받은 '나도 궁금' ${likes}개` : '';
+      return;
+    }
+    $('qList').innerHTML = list.length ? list.map(q => `
+      <div class="q ${q.status === 'answered' ? 'answered' : ''}">
+        <div class="body">${esc(q.body)}
+          <div class="meta">${q.mine ? '내 질문 · ' : ''}${q.status === 'answered' ? '✅ 답변 완료' : ''}</div></div>
+        <button class="like ${q.liked ? 'on' : ''}" data-q="${q.id}" ${q.mine ? 'disabled' : ''}>👍 ${q.likes}</button>
+      </div>`).join('') : '<p class="small">아직 질문이 없어요.</p>';
+  } catch (e) { console.warn(e); }
+}
+$('qList').addEventListener('click', async e => {
+  const b = e.target.closest('button.like'); if (!b || b.disabled) return;
+  try {
+    const r = await rpc('like_question', { p_player: ME.player_id, p_token: ME.token, p_question: Number(b.dataset.q) });
+    if (!r.ok) toast(errText(r.error));
+    loadQuestions();
+  } catch (err) { toast('연결에 문제가 있어요'); console.error(err); }
+});
+
+/* ---------- 시작 ---------- */
+function start() {
+  $('wAv').textContent = animalEmoji(ME.animal); $('wName').textContent = ME.nickname;
+  $('pAv').textContent = animalEmoji(ME.animal); $('pName').textContent = ME.nickname;
+  buildSignals();
+  syncClock().catch(console.warn);
+  setInterval(() => syncClock(1).catch(() => {}), 60000);
+  // 학생은 "방 상태"만 구독해요 (점수·신호까지 받으면 알림이 너무 많아져요)
+  liveSync({ tables: [{ table: 'rooms', filter: 'id=eq.' + ME.room }], refresh: refreshState });
+  tickTimer = setInterval(tick, 250);
+  qTimer = setInterval(() => { if (ST && ST.status === 'playing') loadQuestions(); }, 3000);
+}
+
+(function boot() {
+  buildAnimals();
+  const code = new URLSearchParams(location.search).get('code');   // 주소 뒤의 메모 ?code=4139
+  if (code) $('jCode').value = code;
+  if (ME) start();
+  else {
+    show('vJoin');
+    if (new URLSearchParams(location.search).get('gone')) $('jErr').textContent = '방이 사라졌어요. 새 방 번호를 입력해 주세요.';
+  }
+})();
+</script>
+</body>
+</html>

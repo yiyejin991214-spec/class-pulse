@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>교실 신호등 · Class Pulse</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap" style="max-width:720px">
+  <div class="glass center" style="margin:30px 0 14px">
+    <div style="font-size:54px">🚦</div>
+    <h1 style="font-size:32px;margin:6px 0">교실 신호등</h1>
+    <p style="margin:0">수업 중 <b>이해도</b>를 신호등으로 알리고,<br>궁금한 건 <b>익명으로 질문</b>해요.</p>
+  </div>
+
+  <div class="grid2b" style="grid-template-columns:1fr 1fr">
+    <div class="glass center">
+      <h2>👩‍🏫 선생님</h2>
+      <p class="small">방을 만들고 QR을 보여 주세요</p>
+      <a href="teacher.html"><button class="jelly btn-violet" style="width:100%">수업 방 만들기</button></a>
+    </div>
+    <div class="glass center">
+      <h2>🙋 학생</h2>
+      <p class="small">방 번호 4자리를 입력하세요</p>
+      <input id="code" inputmode="numeric" maxlength="4" placeholder="예: 4139" style="text-align:center;font-size:22px;font-weight:800">
+      <button id="go" class="jelly btn-pink" style="width:100%;margin-top:10px">들어가기</button>
+    </div>
+  </div>
+  <p class="small center" style="margin-top:18px">실명은 받지 않아요. 별명과 동물 친구만 써요. 수업이 끝나면 선생님이 모든 기록을 지울 수 있어요.</p>
+</div>
+<script>
+  const go = () => {
+    const c = document.getElementById('code').value.trim();
+    if (!/^[0-9]{4}$/.test(c)) { alert('방 번호는 숫자 4자리예요.'); return; }
+    location.href = 'student.html?code=' + c;
+  };
+  document.getElementById('go').onclick = go;
+  document.getElementById('code').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+</script>
+</body>
+</html>
